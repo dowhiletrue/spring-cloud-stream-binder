@@ -41,6 +41,14 @@ import java.util.function.Consumer;
 @Setter
 @RequiredArgsConstructor
 public class JCSMPInboundQueueMessageProducer extends MessageProducerSupport implements OrderlyShutdownCapable, Pausable {
+    /**
+     * How long {@link #doStop()} waits for in-flight messages to be processed and ACKed before the
+     * Solace flow is closed. Overridable via the {@code solace.binder.consumer.drain-timeout-ms}
+     * system property. Keep this below the deployment shutdown budget
+     * (k8s {@code terminationGracePeriodSeconds} / Spring {@code spring.lifecycle.timeout-per-shutdown-phase}).
+     */
+    private static final long DRAIN_TIMEOUT_MS = Long.getLong("solace.binder.consumer.drain-timeout-ms", 30_000L);
+
     private final SolaceConsumerDestination consumerDestination;
     private final JCSMPSession jcsmpSession;
     private final ExtendedConsumerProperties<SolaceConsumerProperties> consumerProperties;
@@ -287,8 +295,9 @@ public class JCSMPInboundQueueMessageProducer extends MessageProducerSupport imp
         solaceBinderHealthAccessor.ifPresent(solaceBinderHealth -> solaceBinderHealth.removeBindingHealthIndicator(consumerProperties.getBindingName()));
         FlowReceiver currentFlowReceiver = this.flowReceiver.get();
         if (currentFlowReceiver != null) {
-            currentFlowReceiver.stop();
-            currentFlowReceiver.close();
+            currentFlowReceiver.stop(); // stop new deliveries, but keep the flow open so in-flight messages can still be ACKed
+            this.flowXMLMessageListener.drain(DRAIN_TIMEOUT_MS); // let workers finish + settle in-flight messages
+            currentFlowReceiver.close(); // now safe to close: nothing left to ACK on this flow
             this.flowReceiver.set(null); // Clear the reference to ensure clean restart
         }
         this.flowXMLMessageListener.stopReceiverThreads();

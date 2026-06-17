@@ -1,10 +1,12 @@
 package com.solace.test.integration.testcontainer;
 
+import com.github.dockerjava.api.model.Ulimit;
 import lombok.Getter;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
+import java.time.Duration;
 import java.util.Arrays;
 
 @Getter
@@ -35,7 +37,11 @@ public class PubSubPlusContainer extends GenericContainer<PubSubPlusContainer> {
                 .withAdminPassword(DEFAULT_ADMIN_PASSWORD)
                 .withMaxConnectionCount(DEFAULT_MAX_CONNECTION_COUNT)
                 .withSharedMemorySize(DEFAULT_SHM_SIZE)
-                .waitingFor(Wait.forListeningPort());
+                // Solace requires a 'nofile' hard limit of 1048576; without it the broker fails its
+                // pre-startup checks ("POST Violation [022]") and shuts down, so JCSMP connections are refused.
+                .withCreateContainerCmdModifier(cmd -> cmd.getHostConfig()
+                        .withUlimits(new Ulimit[]{new Ulimit("nofile", 1048576L, 1048576L)}))
+                .waitingFor(Wait.forListeningPort().withStartupTimeout(Duration.ofMinutes(3)));
     }
 
     public String getOrigin(Port port) {
